@@ -6,6 +6,7 @@ Differences from an upstream build:
 
 - `/app/LICENSE` is included (Apache-2.0).
 - `RELEASE_DISTRIBUTION=none` is set by default (see [Security](#security)).
+- `LANG=C.UTF-8` is set so the Erlang VM uses UTF-8 filename encoding instead of latin1.
 
 ## Usage
 
