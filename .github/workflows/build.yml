@@ -1,0 +1,96 @@
+name: Build and publish
+
+on:
+  push:
+    branches: [main]
+    paths: [Dockerfile, .github/workflows/build.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  UPSTREAM_REF: 3fc41c96c8c63f3a7109e832899cc57d473c4531
+  IMAGE: ghcr.io/malsius/paseo-relay
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out packaging
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out upstream
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: getpaseo/paseo-relay
+          ref: ${{ env.UPSTREAM_REF }}
+          path: upstream
+          persist-credentials: false
+
+      - name: Build upstream
+        run: docker build -t paseo-relay-upstream upstream
+
+      - name: Package image
+        env:
+          SOURCE_URL: https://github.com/${{ github.repository }}
+        run: |
+          docker build -f Dockerfile \
+            --build-arg UPSTREAM_IMAGE=paseo-relay-upstream \
+            -t "${IMAGE}:sha-${UPSTREAM_REF:0:12}" \
+            -t "${IMAGE}:latest" \
+            --label "org.opencontainers.image.source=${SOURCE_URL}" \
+            --label "org.opencontainers.image.revision=${UPSTREAM_REF}" \
+            --label "org.opencontainers.image.url=https://github.com/getpaseo/paseo-relay" \
+            --label "org.opencontainers.image.licenses=Apache-2.0" \
+            --label "org.opencontainers.image.description=Unofficial build of upstream Paseo Relay. See the repository for differences." \
+            upstream
+
+      - name: Smoke test hardened image
+        run: |
+          trap 'docker rm -f paseo-relay-smoke' EXIT
+          docker run -d --name paseo-relay-smoke \
+            --user 65534:65534 --read-only \
+            -p 4000:4000 "${IMAGE}:sha-${UPSTREAM_REF:0:12}"
+          deadline=$((SECONDS + 60))
+          while (( SECONDS < deadline )); do
+            if curl -fsS --max-time 2 http://127.0.0.1:4000/ready; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs paseo-relay-smoke
+          exit 1
+
+      - name: Publish
+        if: github.ref == 'refs/heads/main'
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          docker push --all-tags "$IMAGE"
+          reference=$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:sha-${UPSTREAM_REF:0:12}")
+          digest=${reference##*@}
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest provenance
+        if: github.ref == 'refs/heads/main'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
