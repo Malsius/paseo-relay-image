@@ -13,7 +13,7 @@ concurrency:
 permissions: {}
 
 env:
-  UPSTREAM_REF: 3fc41c96c8c63f3a7109e832899cc57d473c4531
+  UPSTREAM_REF: eac7c70f95119f913bbd566fc64ba5d52664590f
   IMAGE: ghcr.io/malsius/paseo-relay
 
 jobs:
